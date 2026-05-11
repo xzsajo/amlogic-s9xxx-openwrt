@@ -1,7 +1,7 @@
 #!/bin/bash
 #========================================================================================================================
 # https://github.com/ophub/amlogic-s9xxx-openwrt
-# Description: Automatically Build OpenWrt for Amlogic s9xxx tv box
+# Description: Automatically Build OpenWrt
 # Function: Diy script (After Update feeds, Modify the default IP, hostname, theme, add/remove software packages, etc.)
 # Source code repository: https://github.com/coolsnowwolf/lede / Branch: master
 #========================================================================================================================
@@ -43,6 +43,9 @@ else
     echo "# CONFIG_CCACHE is not set" >>.config
     echo 'CONFIG_CCACHE_DIR=""' >>.config
 fi
+
+# Fix vlmcsd build error
+sed -i 's|-C $(PKG_BUILD_DIR)$|CC="$(TARGET_CC_NOCACHE)"|' package/feeds/packages/vlmcsd/Makefile
 #
 # ------------------------------- Main source ends -------------------------------
 

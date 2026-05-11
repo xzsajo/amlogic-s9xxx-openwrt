@@ -29,6 +29,7 @@ on:
           - 6.1.y
           - 6.6.y
           - 6.12.y
+          - 6.18.y
       kernel_auto:
         description: "Auto use the latest kernel"
         required: false
@@ -55,8 +56,9 @@ on:
         options:
           - clang
           - gcc
-          - gcc-14.2
+          - gcc-15.2
           - gcc-14.3
+          - gcc-14.2
       ccache_clear:
         description: "Set whether to clear the cache"
         required: false
@@ -65,13 +67,13 @@ on:
       docker_image:
         description: "Select Armbian docker image"
         required: false
-        default: "trixie"
+        default: "resolute"
         type: choice
         options:
           - trixie
           - bookworm
+          - resolute
           - noble
-          - jammy
       kernel_sign:
         description: "Set the kernel custom signature"
         required: false
@@ -87,13 +89,13 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
-    if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
+    if: ${{ github.event.repository.owner.id == github.event.sender.id }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Initialization environment
+      - name: Initialize the build environment
         id: init
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -119,7 +121,7 @@ jobs:
           timedatectl status || true
           echo "status=success" >> ${GITHUB_OUTPUT}
 
-      - name: Create simulated physical disk
+      - name: Create virtual disk for extended storage
         id: disk
         run: |
           mnt_size=$(expr $(df -h /mnt | tail -1 | awk '{print $4}' | sed 's/[[:alpha:]]//g' | sed 's/\..*//') - 1)
@@ -139,43 +141,8 @@ jobs:
           df -Th
           echo "status=success" >> ${GITHUB_OUTPUT}
 
-      - name: Install Docker
-        id: install
-        working-directory: /builder
-        if: ${{ steps.disk.outputs.status }} == 'success' && !cancelled()
-        run: |
-          df -hT ${PWD}
-          curl -fsSL https://get.docker.com | sh
-          sudo usermod -aG docker $USER
-          sudo newgrp docker
-          echo "status=success" >> ${GITHUB_OUTPUT}
-
-      - name: Pull Docker Image [ ${{ inputs.docker_image }} ]
-        id: pull
-        working-directory: /builder
-        if: ${{ steps.install.outputs.status }} == 'success' && !cancelled()
-        run: |
-          # Create a docker mapping directory
-          mkdir -p /builder/{compile-kernel/{kernel,output},ccache}
-          ln -sf /builder/compile-kernel/kernel /home/runner/work/_actions/ophub/amlogic-s9xxx-armbian/main/compile-kernel/kernel
-          ln -sf /builder/compile-kernel/output /home/runner/work/_actions/ophub/amlogic-s9xxx-armbian/main/compile-kernel/output
-
-          # Pull the Armbian Docker image
-          docker run -d --privileged \
-              --name armbian-ophub \
-              -v /builder/compile-kernel:/opt/kernel/compile-kernel \
-              -v /builder/ccache:/root/.ccache \
-              -v /etc/localtime:/etc/localtime:ro \
-              -v /etc/timezone:/etc/timezone:ro \
-              -e CCACHE_DIR=/root/.ccache \
-              --restart=always \
-              ophub/armbian-${{ inputs.docker_image }}:arm64
-
-          echo "status=success" >> ${GITHUB_OUTPUT}
-
-      - name: Get kernel source hash
+      - name: Get kernel source commit hash
         id: kernelhash
-        if: ${{ steps.pull.outputs.status }} == 'success' && !cancelled()
         run: |
           # Get the latest source hash from the kernel repository
           api_url="https://api.github.com/repos/${{ inputs.kernel_source }}/linux-${{ inputs.kernel_version }}/git/ref/heads/main"
@@ -190,7 +157,7 @@ jobs:
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /builder/ccache
           key: kernel-${{ inputs.kernel_toolchain }}-${{ inputs.kernel_version }}-${{ env.source_hash }}
@@ -199,7 +166,7 @@ jobs:
 
       - name: Compile the kernel [ ${{ inputs.kernel_version }} ]
         uses: ophub/amlogic-s9xxx-armbian@main
-        if: ${{ steps.pull.outputs.status }} == 'success' && !cancelled()
+        if: ${{ steps.disk.outputs.status == 'success' && !cancelled() }}
         with:
           build_target: kernel
           kernel_source: ${{ inputs.kernel_source }}
@@ -210,10 +177,12 @@ jobs:
           kernel_sign: ${{ inputs.kernel_sign }}
           kernel_toolchain: ${{ inputs.kernel_toolchain }}
           ccache_clear: ${{ inputs.ccache_clear }}
+          docker_hostpath: /builder
+          docker_image: ophub/armbian-${{ inputs.docker_image }}:arm64
 
       - name: Upload Kernel to Release
         uses: ncipollo/release-action@main
-        if: ${{ env.PACKAGED_STATUS }} == 'success' && !cancelled()
+        if: ${{ env.PACKAGED_STATUS == 'success' && !cancelled() }}
         with:
           tag: kernel_stable
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
